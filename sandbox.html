@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Impossible Drop Sandbox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  :root { --paper: #efe6d3; --ink: #2b2620; --soft: #6d6254; --card: rgba(246, 239, 223, .94); }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper); color: var(--ink);
+    font-family: "IM Fell English", Georgia, serif; overscroll-behavior: none;
+    user-select: none; -webkit-user-select: none; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #bar { position: fixed; top: 8px; left: 8px; right: 8px; background: var(--card); border: 1.5px solid var(--ink);
+    border-radius: 4px; padding: 8px 10px; box-shadow: 3px 3px 0 rgba(43, 38, 32, .18); }
+  #bar h1 { margin: 0 8px 0 0; font-size: 19px; font-weight: normal; display: inline; }
+  .row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 5px; }
+  .row:first-child { margin-top: 0; }
+  .sep { width: 1px; height: 22px; background: #b9aa8c; margin: 0 3px; }
+  button, select { font: inherit; font-size: 14px; color: var(--ink); background: #f6efdf; border: 1.5px solid var(--ink);
+    border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+  button:hover { background: #fffaf0; }
+  button.on { background: var(--ink); color: var(--paper); }
+  button:disabled { opacity: .4; cursor: default; }
+  .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 50%; border: 1px solid var(--ink); margin-right: 4px; vertical-align: -1px; }
+  #info { font-size: 14px; color: var(--soft); font-style: italic; }
+  a { color: var(--ink); }
+  @media (pointer: coarse), (max-width: 700px) { button, select { padding: 7px 9px; } }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="bar">
+  <div class="row">
+    <h1>Sandbox</h1>
+    <button id="btnPlay" class="on">Play</button>
+    <button id="btnFast"></button>
+    <button id="btnUndo">Undo</button>
+    <button id="btnClear">Clear</button>
+    <select id="preset" aria-label="Start from a ready-made machine">
+      <option value="">Start from...</option>
+    </select>
+    <a href="index.html">Back to the game</a>
+  </div>
+  <div class="row" id="editRow">
+    <button data-tool="track">Track</button>
+    <button data-tool="joint">Joint</button>
+    <button data-tool="switch">Flip-switch</button>
+    <button data-tool="basket">Basket</button>
+    <button data-tool="hopper">Hopper</button>
+    <button data-tool="cube">Cube</button>
+    <button data-tool="erase">Eraser</button>
+    <span class="sep"></span>
+    <button data-color="">Plain</button>
+    <button data-color="red"><span class="swatch" style="background:#d9533f"></span>Red</button>
+    <button data-color="blue"><span class="swatch" style="background:#3f74c9"></span>Blue</button>
+    <button data-color="gold"><span class="swatch" style="background:#e2b13c"></span>Gold</button>
+    <span class="sep"></span>
+    <button id="btnDown" aria-label="Build lower">&#9660;</button>
+    <span id="heightText"></span>
+    <button id="btnUp" aria-label="Build higher">&#9650;</button>
+    <span class="sep"></span>
+    <button id="btnBalls"></button>
+  </div>
+  <div class="row"><span id="info"></span></div>
+</div>
+
+<script src="engine.js"></script>
+<script src="draw.js"></script>
+<script src="levels/world1.js"></script>
+<script src="levels/world2.js"></script>
+<script src="levels/world3.js"></script>
+<script>
+// The sandbox: build your own machine on the grid, then press Play and turn its joints.
+// What you build is a level (the same format as the levels, see engine.js), kept in "design".
+const D = ImpossibleDrop;
+const $ = id => document.getElementById(id);
+const canvas = $('c'), ctx = canvas.getContext('2d');
+let W = 0, H = 0, scale = 30, ox = 0, oy = 0, clock = 0;
+
+const BALL_MIXES = [['white'], ['red', 'blue'], ['red', 'blue', 'gold']];
+const NAMES = { white: 'white', red: 'red', blue: 'blue', gold: 'gold' };
+const ROOM = { x0: -1, x1: 10, y0: -1, y1: 10, z0: 0, z1: 13 };   // the space you can build in
+
+let design = emptyDesign();
+let g = null;                  // the running game (when playing) or a still picture (when building)
+let playing = false, fast = false;
+let tool = 'track', color = '', height = 6;
+let hover = null, drag = null, history = [];
+
+function emptyDesign() {
+  return { hopper: { at: [1, 0, 11], balls: 999, colors: ['white'] }, tracks: [], rotors: [], baskets: [], blocks: [] };
+}
+
+// ---------- Saving (in this browser only) ----------
+const SAVE_KEY = 'impossible-drop-sandbox';
+function save() { try { localStorage.setItem(SAVE_KEY, JSON.stringify({ design, height })); } catch (e) {} }
+try {
+  const saved = JSON.parse(localStorage.getItem(SAVE_KEY));
+  if (saved && saved.design && saved.design.hopper) { design = saved.design; height = saved.height || height; }
+} catch (e) {}
+
+// Call before every change, so Undo can go back.
+function remember() { history.push(JSON.stringify(design)); if (history.length > 60) history.shift(); }
+function changed() { save(); rebuild(); refreshUI(); }
+
+// Rotors get letters A, B, C... in the order they were added.
+function asLevel() {
+  return { ...design, rotors: design.rotors.map((r, i) => ({ ...r, id: String.fromCharCode(65 + i) })) };
+}
+function rebuild() { g = D.createGame(asLevel()); }
+
+// ---------- Ready-made machines ----------
+const PRESETS = [
+  { name: 'Empty', make: emptyDesign },
+  ...['w1-1', 'w1-4', 'w2-1', 'w2-5', 'w3-1', 'w3-5', 'w3-6'].map(id => {
+    const lv = (globalThis.LEVELS || []).find(l => l.id === id);
+    return lv && { name: lv.name, make: () => fromLevel(lv) };
+  }).filter(Boolean),
+];
+function fromLevel(lv) {
+  const copy = JSON.parse(JSON.stringify(lv));
+  return {
+    hopper: { at: copy.hopper.at, balls: 999, colors: copy.hopper.colors || ['white'] },
+    tracks: copy.tracks || [], blocks: copy.blocks || [],
+    rotors: (copy.rotors || []).map(({ id, ...r }) => r),
+    baskets: (copy.baskets || []).map(b => ({ at: b.at, need: 5, color: b.color || null })),
+  };
+}
+PRESETS.forEach((p, i) => { const o = document.createElement('option'); o.value = i; o.textContent = p.name; $('preset').appendChild(o); });
+$('preset').onchange = () => {
+  const p = PRESETS[+$('preset').value];
+  $('preset').value = '';
+  if (!p) return;
+  stop(); remember(); design = p.make(); changed();
+};
+
+// ---------- Screen and grid ----------
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // Fit the whole building space, so the picture doesn't jump about while you build.
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const x of [ROOM.x0, ROOM.x1]) for (const y of [ROOM.y0, ROOM.y1]) for (const z of [ROOM.z0 - 1, ROOM.z1]) {
+    const p = D.project([x, y, z]);
+    x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]);
+  }
+  const top = $('bar').getBoundingClientRect().bottom + 10, m = 12;
+  scale = Math.max(4, Math.min((W - 2 * m) / (x1 - x0), (H - top - m) / (y1 - y0)));
+  ox = m + ((W - 2 * m) - (x1 - x0) * scale) / 2 - x0 * scale;
+  oy = top + ((H - top - m) - (y1 - y0) * scale) / 2 - y0 * scale;
+}
+
+// The grid point at the current building height under this spot on the screen.
+function gridAt(mx, my) {
+  const sx = (mx - ox) / scale, sy = (my - oy) / scale;
+  const a = sx / (Math.sqrt(3) / 2), b = 2 * (sy + height);    // a = x - y, b = x + y
+  return [Math.round((a + b) / 2), Math.round((b - a) / 2), height];
+}
+const same = (p, q) => p[0] === q[0] && p[1] === q[1] && p[2] === q[2];
+const inRoom = p => p[0] >= ROOM.x0 && p[0] <= ROOM.x1 && p[1] >= ROOM.y0 && p[1] <= ROOM.y1;
+
+// A track from p to q: along x first, then along y (so it can turn one corner).
+function trackPts(p, q) {
+  const pts = [p];
+  if (q[0] !== p[0]) pts.push([q[0], p[1], p[2]]);
+  if (q[1] !== p[1]) pts.push([q[0], q[1], p[2]]);
+  return pts;
+}
+
+// ---------- Building ----------
+function useTool(p) {
+  if (!inRoom(p)) { say('That is outside the building space.'); return; }
+  if (tool === 'joint' || tool === 'switch') {
+    const r = design.rotors.find(r => same(r.at, p));
+    remember();
+    if (r) { r.start = ((r.start || 0) + 1) % 4; say('Turned its starting position.'); }   // tap again to aim it
+    else {
+      const rotor = { at: p, tracks: [{ pts: [[0, 0, 0], [2, 0, 0]] }] };
+      if (tool === 'switch') { rotor.auto = true; rotor.states = 2; }
+      design.rotors.push(rotor);
+      say(tool === 'switch' ? 'A flip-switch: it turns by itself each time a ball rolls off it.' : 'Tap it again to aim it another way.');
+    }
+  } else if (tool === 'basket') {
+    if (design.baskets.some(b => same(b.at, p))) return;
+    remember(); design.baskets.push({ at: p, need: 5, color: color || null });
+  } else if (tool === 'hopper') {
+    remember(); design.hopper.at = [p[0], p[1], p[2] + 3];
+  } else if (tool === 'cube') {
+    if (design.blocks.some(b => same(b, p))) return;
+    remember(); design.blocks.push(p);
+  } else if (tool === 'erase') return;
+  changed();
+}
+
+// Remove whatever is nearest to this spot on the screen.
+function eraseAt(mx, my) {
+  const near = [];
+  const dist = (p, q) => Math.hypot(mx - (ox + p[0] * scale), my - (oy + p[1] * scale));
+  design.tracks.forEach((t, i) => {
+    const s = t.pts.map(D.project);
+    for (let k = 0; k + 1 < s.length; k++) near.push({ d: segDist(mx, my, toScreen(s[k]), toScreen(s[k + 1])), kind: 'tracks', i });
+  });
+  design.rotors.forEach((r, i) => near.push({ d: dist(D.project(r.at)) - 4, kind: 'rotors', i }));
+  design.baskets.forEach((b, i) => near.push({ d: dist(D.project(b.at)) - 6, kind: 'baskets', i }));
+  design.blocks.forEach((b, i) => near.push({ d: dist(D.project([b[0], b[1], b[2] - 0.5])) + 4, kind: 'blocks', i }));
+  near.sort((a, b) => a.d - b.d);
+  const best = near[0];
+  if (!best || best.d > Math.max(18, scale * 0.6)) return;
+  remember(); design[best.kind].splice(best.i, 1); changed();
+}
+
+function segDist(x, y, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy;
+  const t = L ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / L)) : 0;
+  return Math.hypot(x - a[0] - t * dx, y - a[1] - t * dy);
+}
+
+// Which joint is under this spot (while playing)?
+function rotorAt(mx, my) {
+  let best = null, bd = Infinity;
+  for (const r of g.rotors) {
+    const hub = toScreen(D.project(r.at));
+    let d = Math.hypot(mx - hub[0], my - hub[1]) - 6;
+    for (const tr of r.tracks) for (let i = 0; i + 1 < tr.scr.length; i++)
+      d = Math.min(d, segDist(mx, my, toScreen(tr.scr[i]), toScreen(tr.scr[i + 1])));
+    if (d < Math.max(22, scale * 0.7) && d < bd) { bd = d; best = r; }
+  }
+  return best;
+}
+
+// ---------- Touch and mouse ----------
+canvas.addEventListener('pointerdown', e => {
+  if (playing) {
+    const r = rotorAt(e.clientX, e.clientY);
+    if (r && r.auto) say('Flip-switches turn by themselves.');
+    else if (r) D.tap(g, r.id);
+    return;
+  }
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+  if (tool === 'erase') { eraseAt(e.clientX, e.clientY); return; }
+  const p = gridAt(e.clientX, e.clientY);
+  if (tool === 'track') drag = { from: p, to: p };
+  else useTool(p);
+});
+canvas.addEventListener('pointermove', e => {
+  if (playing) { canvas.style.cursor = rotorAt(e.clientX, e.clientY) ? 'pointer' : 'default'; return; }
+  hover = gridAt(e.clientX, e.clientY);
+  if (drag) drag.to = hover;
+  canvas.style.cursor = 'crosshair';
+  refreshInfo();
+});
+function endDrag() {
+  if (!drag) return;
+  const { from, to } = drag; drag = null;
+  if (same(from, to)) { say('Drag along the grid to lay a track. Balls roll the way you drag.'); return; }
+  if (!inRoom(from) || !inRoom(to)) { say('That is outside the building space.'); return; }
+  remember();
+  design.tracks.push(color ? { pts: trackPts(from, to), only: color } : { pts: trackPts(from, to) });
+  changed();
+}
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', () => { drag = null; });
+canvas.addEventListener('pointerleave', () => { hover = null; refreshInfo(); });
+
+// ---------- Buttons ----------
+document.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => { tool = b.dataset.tool; refreshUI(); });
+document.querySelectorAll('[data-color]').forEach(b => b.onclick = () => { color = b.dataset.color; refreshUI(); });
+$('btnUp').onclick = () => { height = Math.min(ROOM.z1 - 3, height + 1); save(); refreshUI(); };
+$('btnDown').onclick = () => { height = Math.max(ROOM.z0 + 1, height - 1); save(); refreshUI(); };
+$('btnBalls').onclick = () => {
+  const now = BALL_MIXES.findIndex(m => m.join() === design.hopper.colors.join());
+  remember(); design.hopper.colors = BALL_MIXES[(now + 1) % BALL_MIXES.length]; changed();
+};
+$('btnPlay').onclick = () => playing ? stop() : play();
+$('btnFast').onclick = () => { fast = !fast; refreshUI(); };
+$('btnUndo').onclick = () => { if (!history.length) return; stop(); design = JSON.parse(history.pop()); changed(); };
+$('btnClear').onclick = () => { stop(); remember(); design = emptyDesign(); changed(); say('Cleared. Undo brings it back.'); };
+addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); $('btnUndo').click(); }
+});
+
+function play() { playing = true; rebuild(); refreshUI(); say('Tap a joint to turn it. Press Stop to build again.'); }
+function stop() { if (!playing) return; playing = false; rebuild(); refreshUI(); }
+
+let message = null;
+function say(text) { message = { text, until: clock + 3 }; }
+
+function refreshUI() {
+  $('btnPlay').textContent = playing ? 'Stop' : 'Play';
+  $('btnPlay').className = playing ? '' : 'on';
+  $('btnFast').textContent = fast ? 'Speed: fast' : 'Speed: normal';
+  $('btnUndo').disabled = !history.length;
+  $('editRow').hidden = playing;
+  document.querySelectorAll('[data-tool]').forEach(b => b.className = b.dataset.tool === tool ? 'on' : '');
+  document.querySelectorAll('[data-color]').forEach(b => b.className = b.dataset.color === color ? 'on' : '');
+  $('heightText').textContent = 'Height ' + height;
+  $('btnBalls').textContent = 'Balls: ' + design.hopper.colors.map(c => NAMES[c]).join(' + ');
+  refreshInfo();
+  resize();
+}
+const TIPS = {
+  track: 'Drag to lay a track (it can turn one corner). Balls roll the way you drag. Coloured tracks only carry their own colour.',
+  joint: 'Tap to add a joint. Tap it again to aim it another way. Join tracks to its middle.',
+  switch: 'Tap to add a flip-switch: it turns by itself each time a ball rolls off it.',
+  basket: 'Tap to add a basket. A coloured basket spills if a ball of another colour lands in it.',
+  hopper: 'Tap to move the hopper. Balls fall straight down from it.',
+  cube: 'Tap to add a cube. Cubes are only for looks: balls pass through them.',
+  erase: 'Tap something to remove it.',
+};
+function refreshInfo() {
+  if (playing) {
+    const caught = g.baskets.reduce((n, k) => n + k.count, 0);
+    $('info').textContent = `Balls dropped: ${g.dropped} · in baskets: ${caught} · lost: ${g.lost}`;
+    return;
+  }
+  const where = hover ? ` (point ${hover[0]}, ${hover[1]}, height ${hover[2]})` : '';
+  $('info').textContent = TIPS[tool] + where;
+}
+
+// ---------- Drawing ----------
+// The grid you are building on: a faint diamond lattice at the current height.
+function drawGrid() {
+  ctx.strokeStyle = 'rgba(43, 38, 32, .13)'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = ROOM.x0; x <= ROOM.x1; x++) {
+    const a = toScreen(D.project([x, ROOM.y0, height])), b = toScreen(D.project([x, ROOM.y1, height]));
+    ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+  }
+  for (let y = ROOM.y0; y <= ROOM.y1; y++) {
+    const a = toScreen(D.project([ROOM.x0, y, height])), b = toScreen(D.project([ROOM.x1, y, height]));
+    ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+  }
+  ctx.stroke();
+}
+
+function drawMarker(p, strong) {
+  const c = toScreen(D.project(p)), R = scale * 0.5;
+  ctx.strokeStyle = strong ? '#9b3d2c' : 'rgba(155, 61, 44, .6)'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(c[0], c[1] - R * 0.5); ctx.lineTo(c[0] + R * 0.87, c[1]); ctx.lineTo(c[0], c[1] + R * 0.5); ctx.lineTo(c[0] - R * 0.87, c[1]);
+  ctx.closePath(); ctx.stroke();
+}
+
+function draw() {
+  ctx.fillStyle = '#efe6d3'; ctx.fillRect(0, 0, W, H);
+  if (!playing) drawGrid();
+  drawWorld(asLevel(), g);
+  // How many balls each basket has caught.
+  ctx.font = `${Math.max(12, scale * 0.4)}px "IM Fell English", Georgia, serif`; ctx.textAlign = 'center'; ctx.fillStyle = INK;
+  for (const k of g.baskets) if (k.count) { const c = toScreen(k.scr); ctx.fillText('×' + k.count, c[0] + scale * 0.9, c[1] + scale * 0.5); }
+  if (!playing) {
+    if (drag) {
+      const pts = trackPts(drag.from, drag.to);
+      ctx.strokeStyle = color ? D.COLORS[color] : '#9b3d2c'; ctx.lineWidth = Math.max(3, scale * 0.12); ctx.setLineDash([6, 5]);
+      ctx.beginPath(); pts.forEach((p, i) => { const s = toScreen(D.project(p)); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); }); ctx.stroke();
+      ctx.setLineDash([]);
+      drawMarker(drag.from, true); drawMarker(drag.to, true);
+    } else if (hover && tool !== 'erase') drawMarker(hover, false);
+  }
+  if (message && clock < message.until) {
+    ctx.font = '15px "IM Fell English", Georgia, serif'; ctx.textAlign = 'center';
+    const tw = Math.min(W - 24, ctx.measureText(message.text).width + 28);
+    ctx.fillStyle = 'rgba(43, 38, 32, .9)'; ctx.fillRect(W / 2 - tw / 2, H - 46, tw, 30);
+    ctx.fillStyle = '#f7f0e0'; ctx.fillText(message.text, W / 2, H - 26, tw - 16);
+  }
+}
+
+let last = performance.now(), bank = 0, infoTimer = 0;
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  clock += dt;
+  if (playing) {
+    bank += dt * (fast ? 2 : 1);
+    while (bank >= D.DT) { bank -= D.DT; D.step(g); g.events.length = 0; }
+    if ((infoTimer += dt) > 0.25) { infoTimer = 0; refreshInfo(); }
+  }
+  draw();
+  requestAnimationFrame(frame);
+}
+
+addEventListener('resize', resize);
+rebuild();
+refreshUI();
+requestAnimationFrame(frame);
+
+// A handle for testing from the browser console.
+window.sandbox = {
+  get design() { return design; }, get state() { return g; }, get playing() { return playing; },
+  play, stop, draw, useTool, eraseAt, gridAt,
+  setTool(t) { tool = t; refreshUI(); }, setColor(c) { color = c; refreshUI(); }, setHeight(h) { height = h; refreshUI(); },
+  addTrack(from, to) { remember(); design.tracks.push(color ? { pts: trackPts(from, to), only: color } : { pts: trackPts(from, to) }); changed(); },
+  run(seconds) { for (let k = 0; k < seconds / D.DT; k++) D.step(g); g.events.length = 0; },
+};
+</script>
+</body>
+</html>
