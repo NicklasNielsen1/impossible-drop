@@ -16,13 +16,14 @@
 // screen and lands on the first track (or basket) drawn under it. If there is nothing, it is lost.
 // A ball on a track rolls along it, in the order the track's points are listed. At the end of a
 // track it carries on along any track that STARTS at that same screen point; if there is none,
-// it falls off. Balls pass through each other.
+// it falls off. If there are several, a track of the ball's own colour wins over a plain one.
+// Balls pass through each other.
 //
 // Rotors are the parts the player turns: a small one is a "joint", a big one a "tower".
 // Each tap turns a rotor a quarter turn (90 degrees) around the up-down axis through its "at"
 // point. A rotor with states: 2 swings back and forth between two positions instead.
 // While a rotor turns (TURN_TIME seconds), balls on it ride along and stop rolling, and nothing
-// can join onto it. An "auto" rotor (a flip-switch) can't be tapped: it turns by itself each
+// can join onto it: a ball that reaches the centre of a turning joint waits there until it stops. An "auto" rotor (a flip-switch) can't be tapped: it turns by itself each
 // time a ball leaves one of its tracks.
 //
 // Each basket needs a number of balls. A ball of the wrong colour empties the basket.
@@ -250,11 +251,20 @@
   // A ball reached the end of its track: join the next track, or fall off.
   function leaveEnd(g, b, tr) {
     const end = tr.scr[tr.scr.length - 1];
+    // A rotor that is turning, with a track that starts right here on its axis: wait until it stops.
+    for (const r of g.rotors) {
+      if (!busy(r) || r === tr.rotor) continue;
+      const here = r.tracks.some(o => o.offs[0][0] === 0 && o.offs[0][1] === 0 &&
+        dist(project([r.at[0], r.at[1], r.at[2] + o.offs[0][2]]), end) <= JOIN);
+      if (here) { b.seg = tr.scr.length - 2; b.f = 1; setRollPos(b, tr); return; }
+    }
     let next = null;
     for (const o of g.tracks) {
       if (o === tr || !allows(o, b.color) || (o.rotor && busy(o.rotor))) continue;
       if (dist(o.scr[0], end) > JOIN) continue;
-      if (!next || depth(o.pts[0]) > depth(next.pts[0])) next = o;      // the nearest one wins
+      // A track of the ball's own colour wins, then the one nearest to the viewer.
+      const score = t => (t.only ? 1000 : 0) + depth(t.pts[0]);
+      if (!next || score(o) > score(next)) next = o;
     }
     b.x = end[0]; b.y = end[1];
     if (next) { b.track = next.index; b.seg = 0; b.f = 0; }

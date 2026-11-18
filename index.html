@@ -29,6 +29,11 @@
   @media (pointer: coarse), (max-width: 700px) {
     #corner button { padding: 8px 10px; }
     #hud { padding: 7px 9px; max-width: calc(100% - 120px); }
+  }
+  /* Narrow screens (phones held upright): the buttons go in a row along the bottom. */
+  @media (max-width: 700px) {
+    #corner { top: auto; bottom: 10px; left: 8px; right: 8px; flex-direction: row; flex-wrap: wrap; justify-content: center; }
+    #hud { max-width: calc(100% - 24px); }
     #hud h1 { font-size: 16px; }
     #hud p { font-size: 12.5px; margin-top: 2px; }
   }
@@ -309,9 +314,11 @@ function fit() {
   }
   add([g.hopperScr[0], g.hopperScr[1] - 1.2], 0.8);
   for (const k of g.baskets) { add(k.scr, 0.8); add([k.scr[0], k.scr[1] + 1.4], 0.3); }
-  const hud = $('hud').getBoundingClientRect();
-  const top = Math.max(W < 700 ? 96 : 86, hud.bottom + 50), bottom = 24, side = W < 700 ? 16 : 30;
-  const right = W < 700 ? 110 : 130;
+  const hud = $('hud').getBoundingClientRect(), narrow = W < 700;
+  const top = Math.max(narrow ? 96 : 86, hud.bottom + 50), side = narrow ? 16 : 30;
+  // On narrow screens the buttons sit along the bottom, otherwise down the right-hand side.
+  const bottom = narrow ? H - $('corner').getBoundingClientRect().top + 50 : 60;
+  const right = narrow ? side : 130;
   scale = Math.max(4, Math.min((W - side - right) / (x1 - x0), (H - top - bottom) / (y1 - y0), 70));
   ox = side + ((W - side - right) - (x1 - x0) * scale) / 2 - x0 * scale;
   oy = top + ((H - top - bottom) - (y1 - y0) * scale) / 2 - y0 * scale;
@@ -554,7 +561,8 @@ function draw() {
 
   if (message && message.text && clock < message.until) {
     ctx.font = '16px "IM Fell English", Georgia, serif'; ctx.textAlign = 'center';
-    const tw = Math.min(W - 24, ctx.measureText(message.text).width + 28), y = H - 34;
+    const tw = Math.min(W - 24, ctx.measureText(message.text).width + 28);
+    const y = W < 700 ? $('corner').getBoundingClientRect().top - 24 : H - 34;
     ctx.fillStyle = 'rgba(43, 38, 32, .9)'; ctx.fillRect(W / 2 - tw / 2, y - 19, tw, 30);
     ctx.fillStyle = '#f7f0e0'; ctx.fillText(message.text, W / 2, y + 1, tw - 16);
   }
