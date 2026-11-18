@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Impossible Drop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  :root { --paper: #efe6d3; --ink: #2b2620; --soft: #6d6254; --card: rgba(246, 239, 223, .94); --line: #b9aa8c; --accent: #9b3d2c; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper); color: var(--ink);
+    font-family: "IM Fell English", Georgia, serif; overscroll-behavior: none;
+    user-select: none; -webkit-user-select: none; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: default; }
+  .panel { background: var(--card); border: 1.5px solid var(--ink); border-radius: 4px; padding: 10px 12px;
+    box-shadow: 3px 3px 0 rgba(43, 38, 32, .18); }
+  #hud { position: fixed; top: 12px; left: 12px; max-width: min(420px, calc(100% - 150px)); pointer-events: none; }
+  #hud h1 { margin: 0; font-size: 19px; font-weight: normal; }
+  #hud p { margin: 3px 0 0; font-size: 14px; color: var(--soft); font-style: italic; }
+  #hud .count { color: var(--ink); font-style: normal; }
+  #corner { position: fixed; top: 12px; right: 12px; display: flex; gap: 6px; flex-direction: column; }
+  button { font: inherit; font-size: 14px; color: var(--ink); background: #f6efdf; border: 1.5px solid var(--ink);
+    border-radius: 4px; padding: 5px 12px; cursor: pointer; }
+  button:hover { background: #fffaf0; }
+  button.primary { background: var(--ink); color: var(--paper); }
+  button:disabled { opacity: .4; cursor: default; }
+  @media (pointer: coarse), (max-width: 700px) {
+    #corner button { padding: 8px 10px; }
+    #hud { padding: 7px 9px; max-width: calc(100% - 120px); }
+    #hud h1 { font-size: 16px; }
+    #hud p { font-size: 12.5px; margin-top: 2px; }
+  }
+  .overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(239, 230, 211, .7); padding: 16px; overflow: auto; }
+  .card { width: min(540px, 100%); max-height: 100%; overflow: auto; text-align: center; padding: 20px; }
+  .card h2 { margin: 0 0 4px; font-size: 30px; font-weight: normal; letter-spacing: 2px; }
+  .card p { margin: 4px 0 12px; color: var(--soft); font-size: 15px; }
+  .world { text-align: left; margin-top: 14px; }
+  .world h3 { margin: 0 0 6px; font-size: 15px; color: var(--soft); font-weight: normal; font-style: italic; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .lvl { padding: 7px 4px; text-align: center; line-height: 1.25; }
+  .lvl b { display: block; font-size: 14px; font-weight: normal; }
+  .lvl span { font-size: 14px; color: var(--accent); letter-spacing: 1px; }
+  .lvl span i { color: var(--line); font-style: normal; }
+  .stars { font-size: 40px; color: var(--accent); letter-spacing: 6px; margin: 6px 0; }
+  .stars i { color: var(--line); font-style: normal; }
+  .rowc { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="hud" class="panel" hidden>
+  <h1 id="lvlName"></h1>
+  <p id="lvlHint"></p>
+  <p class="count" id="lvlCount"></p>
+</div>
+
+<div id="corner" hidden>
+  <button id="btnMenu">Levels</button>
+  <button id="btnRestart">Restart</button>
+  <button id="btnSolution">Solution</button>
+  <button id="btnFast"></button>
+  <button id="btnSound"></button>
+</div>
+
+<div id="menu" class="overlay">
+  <div class="card panel">
+    <h2>IMPOSSIBLE DROP</h2>
+    <p>Balls fall from the hopper and roll along the tracks. Tap a joint to turn it and steer them into the baskets. Only the picture counts: if two tracks <i>look</i> joined, they <i>are</i> joined.</p>
+    <p id="devNote" hidden style="color:#9b3d2c">Dev mode: all levels unlocked. Type "dev" again to turn it off.</p>
+    <div id="worlds"></div>
+    <!-- TEMPORARY, for testing on a phone: remove this button (and its line in showMenu and
+         its onclick below) when it is no longer needed. Typing "dev" keeps working without it. -->
+    <div class="rowc"><button id="btnDev" style="opacity:.6;font-size:12px"></button></div>
+  </div>
+</div>
+
+<div id="win" class="overlay" hidden>
+  <div class="card panel">
+    <h2 id="winTitle"></h2>
+    <div class="stars" id="winStars"></div>
+    <p id="winText"></p>
+    <div class="rowc">
+      <button id="btnWinRestart">Play again</button>
+      <button id="btnWinMenu">Levels</button>
+      <button id="btnNext" class="primary">Next level</button>
+    </div>
+  </div>
+</div>
+
+<script src="engine.js"></script>
+<script src="levels/world1.js"></script>
+<script src="levels/world2.js"></script>
+<script src="levels/world3.js"></script>
+<script>
+const D = ImpossibleDrop;
+const LEVELS = globalThis.LEVELS || [];
+const WORLD_NAMES = { 1: 'World 1 · Joints and Stairs', 2: 'World 2 · Colours', 3: 'World 3 · Turning Towers' };
+const worldOf = level => +level.id.match(/^w(\d+)/)[1];
+const $ = id => document.getElementById(id);
+const STAR = '★', LOCK = '🔒', MIDDOT = '·';
+
+// ---------- Saved progress ----------
+// Stars per level are kept in localStorage, the browser's small per-site storage.
+const SAVE_KEY = 'impossible-drop-progress';
+let progress = {};
+try { progress = JSON.parse(localStorage.getItem(SAVE_KEY)) || {}; } catch (e) { progress = {}; }
+function saveProgress() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(progress)); } catch (e) {} }
+// Dev mode opens every level for testing. Turn it on or off by typing the letters d, e, v
+// anywhere on the page (or add ?unlock to the address). It is remembered in this browser.
+const DEV_KEY = 'impossible-drop-dev';
+let unlockAll = location.search.includes('unlock');
+try { unlockAll = unlockAll || localStorage.getItem(DEV_KEY) === '1'; } catch (e) {}
+let typed = '';
+addEventListener('keydown', e => {
+  if (e.key.length !== 1) return;
+  typed = (typed + e.key.toLowerCase()).slice(-3);
+  if (typed !== 'dev') return;
+  typed = '';
+  toggleDev();
+});
+function toggleDev() {
+  unlockAll = !unlockAll;
+  try { localStorage.setItem(DEV_KEY, unlockAll ? '1' : '0'); } catch (e) {}
+  if (mode === 'menu') showMenu(); else say(unlockAll ? 'Dev mode on: all levels unlocked' : 'Dev mode off');
+}
+const isUnlocked = i => unlockAll || i === 0 || progress[LEVELS[i - 1].id] > 0;
+
+// ---------- Sound ----------
+// Sounds are made on the spot with the browser's built-in synthesizer (no sound files).
+// Browsers only allow sound after the first tap or click, so it starts then.
+const MUTE_KEY = 'impossible-drop-mute';
+let muted = false, audio = null, lastSound = {};
+try { muted = localStorage.getItem(MUTE_KEY) === '1'; } catch (e) {}
+function wakeAudio() {
+  if (audio || muted) return;
+  try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { audio = null; }
+}
+function beep(kind, freq, dur, type, vol, gap, delay) {
+  if (muted || !audio) return;
+  const now = audio.currentTime;
+  if (gap && now - (lastSound[kind] || -9) < gap) return;
+  lastSound[kind] = now;
+  try {
+    const o = audio.createOscillator(), g = audio.createGain(), t0 = now + (delay || 0);
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(audio.destination);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+  } catch (e) {}
+}
+function setMuted(m) {
+  muted = m;
+  try { localStorage.setItem(MUTE_KEY, m ? '1' : '0'); } catch (e) {}
+  $('btnSound').textContent = m ? 'Sound: off' : 'Sound: on';
+  if (!m) wakeAudio();
+}
+
+// ---------- Game state ----------
+const canvas = $('c'), ctx = canvas.getContext('2d');
+let W = 0, H = 0, scale = 40, ox = 0, oy = 0;
+let mode = 'menu';            // 'menu' | 'play' | 'winning' (a short pause) | 'won'
+let levelIndex = 0, level = null, g = null;
+let fast = false, usedSolution = false, autoTaps = [], winTimer = 0;
+let sparks = [], message = null, clock = 0, stepBank = 0, outShown = false;
+
+function say(text, secs) { message = { until: clock + (secs || 2.4), text }; }
+
+function startLevel(i, keepSolution) {
+  if (!LEVELS[i]) return;
+  levelIndex = i; level = LEVELS[i];
+  g = D.createGame(level);
+  if (!keepSolution) { usedSolution = false; autoTaps = []; }
+  sparks = []; message = null; stepBank = 0; outShown = false;
+  mode = 'play';
+  $('menu').hidden = true; $('win').hidden = true;
+  $('hud').hidden = false; $('corner').hidden = false;
+  $('lvlName').textContent = `${level.id.slice(1)} ${level.name}`;
+  $('lvlHint').textContent = level.hint;
+  fit();
+  refreshUI();
+}
+
+function showMenu() {
+  mode = 'menu';
+  $('hud').hidden = true; $('corner').hidden = true; $('win').hidden = true;
+  $('menu').hidden = false;
+  $('devNote').hidden = !unlockAll;
+  $('btnDev').textContent = unlockAll ? 'Dev mode: on (tap to turn off)' : 'Dev mode: off (tap to unlock all levels)';
+  const box = $('worlds');
+  box.innerHTML = '';
+  let grid = null, lastWorld = 0;
+  LEVELS.forEach((lv, i) => {
+    const w = worldOf(lv);
+    if (w !== lastWorld) {
+      lastWorld = w;
+      const sec = document.createElement('div');
+      sec.className = 'world';
+      sec.innerHTML = '<h3>' + (WORLD_NAMES[w] || 'World ' + w) + '</h3><div class="grid"></div>';
+      box.appendChild(sec);
+      grid = sec.lastChild;
+    }
+    const b = document.createElement('button');
+    b.className = 'lvl';
+    const open = isUnlocked(i), stars = progress[lv.id] || 0;
+    b.disabled = !open;
+    b.innerHTML = '<b>' + lv.id.slice(1) + ' ' + lv.name + '</b><span>' + (open ? STAR.repeat(stars) + '<i>' + STAR.repeat(3 - stars) + '</i>' : LOCK) + '</span>';
+    b.onclick = () => { wakeAudio(); startLevel(i); };
+    grid.appendChild(b);
+  });
+}
+
+const parText = () => level.par === 1 ? '1 tap' : `${level.par} taps or fewer`;
+
+function refreshUI() {
+  if (!g) return;
+  const left = g.total - g.dropped;
+  $('lvlCount').textContent = `Taps: ${g.taps} ${MIDDOT} 3 stars: ${parText()} ${MIDDOT} balls left: ${left}`;
+  $('btnFast').textContent = fast ? 'Speed: fast' : 'Speed: normal';
+}
+
+function useSolution() {
+  startLevel(levelIndex, true);
+  usedSolution = true;
+  autoTaps = level.solution.slice().sort((a, b) => a.t - b.t);
+  say('Watch the built-in solution.');
+}
+
+function tapRotor(id) {
+  if (mode !== 'play') return;
+  const r = g.rotors.find(r => r.id === id);
+  if (r && r.auto) { say('That one is a flip-switch: it turns by itself when a ball rolls off it.'); return; }
+  if (!D.tap(g, id)) return;
+  refreshUI();
+}
+
+// ---------- Running the game ----------
+function burst(x, y, color, n, speed) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * 6.283, v = (speed || 3) * (0.2 + Math.random() * 0.8);
+    sparks.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 1, life: 0.3 + Math.random() * 0.4, color });
+  }
+}
+
+function stepOnce() {
+  while (autoTaps.length && autoTaps[0].t <= g.t + 1e-9) D.tap(g, autoTaps.shift().rotor);
+  D.step(g);
+  for (const e of g.events.splice(0)) {
+    if (e.type === 'drop') { beep('drop', 330, 0.05, 'triangle', 0.03, 0.05); refreshUI(); }
+    else if (e.type === 'land') beep('land', 180 + Math.random() * 30, 0.05, 'triangle', 0.05, 0.04);
+    else if (e.type === 'turn') { beep('turn', e.auto ? 900 : 620, 0.04, 'square', 0.02, 0.02); refreshUI(); }
+    else if (e.type === 'basket') {
+      burst(e.x, e.y, '#9b3d2c', 10);
+      beep('basket', e.full ? 784 : 523, 0.25, 'sine', 0.08, 0.03);
+    }
+    else if (e.type === 'spill') { burst(e.x, e.y, '#2b2620', 16, 4); beep('spill', 110, 0.3, 'sawtooth', 0.05, 0.1); say('Wrong colour! That basket spilled.'); }
+    else if (e.type === 'lost') beep('lost', 90, 0.12, 'sine', 0.04, 0.1);
+    else if (e.type === 'win') onWin();
+  }
+  if (g.out && !outShown && mode === 'play') { outShown = true; say('Out of balls. Tap Restart to try again.', 9999); }
+}
+
+function onWin() {
+  [523, 659, 784, 1047].forEach((f, i) => beep('win' + i, f, 0.3, 'triangle', 0.07, 0, i * 0.11));
+  for (const k of g.baskets) burst(k.scr[0], k.scr[1], '#9b3d2c', 30, 5);
+  mode = 'winning'; winTimer = 1.0;
+}
+
+function showWin() {
+  const used = g.taps;
+  let stars = used <= level.par ? 3 : used <= level.par + 2 ? 2 : 1;
+  if (usedSolution) stars = 1;
+  progress[level.id] = Math.max(progress[level.id] || 0, stars);
+  saveProgress();
+  mode = 'won';
+  $('winTitle').textContent = 'Baskets full!';
+  $('winStars').innerHTML = STAR.repeat(stars) + '<i>' + STAR.repeat(3 - stars) + '</i>';
+  $('winText').textContent = usedSolution ? 'That was the built-in solution, so it counts for 1 star. Try it your own way for more.'
+    : `You used ${used} tap${used === 1 ? '' : 's'}. For three stars: ${parText()}.`;
+  $('btnNext').hidden = levelIndex >= LEVELS.length - 1;
+  $('win').hidden = false;
+}
+
+function advance(dt) {
+  clock += dt;
+  for (const s of sparks) { s.x += s.vx * dt; s.y += s.vy * dt; s.vy += 6 * dt; s.life -= dt; }
+  sparks = sparks.filter(s => s.life > 0);
+  if (!g || (mode !== 'play' && mode !== 'winning')) return;
+  if (mode === 'winning') { winTimer -= dt; if (winTimer <= 0) { showWin(); return; } }
+  stepBank += dt * (fast ? 2 : 1);
+  while (stepBank >= D.DT) { stepBank -= D.DT; stepOnce(); }
+}
+
+// ---------- Screen positions ----------
+// The level's own screen units (see engine.js) are scaled to fit the window.
+function fit() {
+  if (!level || !g) return;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  const add = (p, m) => { x0 = Math.min(x0, p[0] - m); x1 = Math.max(x1, p[0] + m); y0 = Math.min(y0, p[1] - m); y1 = Math.max(y1, p[1] + m); };
+  for (const tr of g.tracks) for (const p of D.allPositions(tr)) add(D.project(p), 0.6);
+  for (const b of level.blocks || []) { add(D.project(b), 1); add(D.project([b[0], b[1], b[2] - 1]), 1); }
+  for (const r of g.rotors) for (const b of r.blocks) for (let q = 0; q < 4; q++) {
+    const p = D.turnPoint(r.at, b, q); add(D.project(p), 1); add(D.project([p[0], p[1], p[2] - 1]), 1);
+  }
+  add([g.hopperScr[0], g.hopperScr[1] - 1.2], 0.8);
+  for (const k of g.baskets) { add(k.scr, 0.8); add([k.scr[0], k.scr[1] + 1.4], 0.3); }
+  const hud = $('hud').getBoundingClientRect();
+  const top = Math.max(W < 700 ? 96 : 86, hud.bottom + 50), bottom = 24, side = W < 700 ? 16 : 30;
+  const right = W < 700 ? 110 : 130;
+  scale = Math.max(4, Math.min((W - side - right) / (x1 - x0), (H - top - bottom) / (y1 - y0), 70));
+  ox = side + ((W - side - right) - (x1 - x0) * scale) / 2 - x0 * scale;
+  oy = top + ((H - top - bottom) - (y1 - y0) * scale) / 2 - y0 * scale;
+}
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  fit();
+}
+const px = p => ox + p[0] * scale, py = p => oy + p[1] * scale;
+const toScreen = p => [px(p), py(p)];
+
+// Which rotor is under this spot on the screen (or null)?
+function rotorAt(mx, my) {
+  let best = null, bd = Infinity;
+  for (const r of g.rotors) {
+    const hub = toScreen(D.project(r.at));
+    let d = Math.hypot(mx - hub[0], my - hub[1]) - 6;
+    for (const tr of r.tracks) for (let i = 0; i + 1 < tr.scr.length; i++)
+      d = Math.min(d, segDist(mx, my, toScreen(tr.scr[i]), toScreen(tr.scr[i + 1])));
+    if (d < Math.max(24, scale * 0.7) && d < bd) { bd = d; best = r; }
+  }
+  return best;
+}
+function segDist(x, y, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy;
+  const t = L ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / L)) : 0;
+  return Math.hypot(x - a[0] - t * dx, y - a[1] - t * dy);
+}
+
+// ---------- Touch and mouse ----------
+canvas.addEventListener('pointerdown', e => {
+  wakeAudio();
+  if (mode !== 'play') return;
+  const r = rotorAt(e.clientX, e.clientY);
+  if (r) { if (usedSolution) { say('The solution is playing. Tap Restart to play yourself.'); return; } tapRotor(r.id); }
+});
+canvas.addEventListener('pointermove', e => {
+  canvas.style.cursor = mode === 'play' && rotorAt(e.clientX, e.clientY) ? 'pointer' : 'default';
+});
+
+$('btnMenu').onclick = showMenu;
+$('btnRestart').onclick = () => { wakeAudio(); startLevel(levelIndex); };
+$('btnSolution').onclick = () => { wakeAudio(); useSolution(); };
+$('btnFast').onclick = () => { fast = !fast; refreshUI(); };
+$('btnSound').onclick = () => setMuted(!muted);
+$('btnWinMenu').onclick = showMenu;
+$('btnWinRestart').onclick = () => startLevel(levelIndex);
+$('btnNext').onclick = () => startLevel(levelIndex + 1);
+$('btnDev').onclick = toggleDev;   // TEMPORARY (see the note next to the button above)
+
+// ---------- Drawing ----------
+// Everything is drawn back to front ("painter's order"): each piece has a depth, the
+// biggest depth is nearest to the viewer and is drawn last.
+const INK = '#2b2620', TOP = '#f7f0e0', LIGHT = '#ddd1b6', DARK = '#b3a382';
+
+function poly(pts) { ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(px(p), py(p)) : ctx.moveTo(px(p), py(p))); ctx.closePath(); }
+
+// Fine diagonal lines inside a shape, like an engraving's shading.
+function hatch(pts, gap, alpha) {
+  ctx.save(); poly(pts); ctx.clip();
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const p of pts) { x0 = Math.min(x0, px(p)); x1 = Math.max(x1, px(p)); y0 = Math.min(y0, py(p)); y1 = Math.max(y1, py(p)); }
+  ctx.strokeStyle = `rgba(43, 38, 32, ${alpha})`; ctx.lineWidth = 0.8; ctx.beginPath();
+  for (let k = x0 - (y1 - y0); k < x1; k += gap) { ctx.moveTo(k, y1); ctx.lineTo(k + (y1 - y0), y0); }
+  ctx.stroke(); ctx.restore();
+}
+
+// A cube whose TOP face is centred on c, optionally turned q quarter turns around a rotor's point.
+function cubePieces(c, out, rotor) {
+  const corner = (dx, dy, dz) => rotor
+    ? D.turnPoint(rotor.at, [c[0] + dx - rotor.at[0], c[1] + dy - rotor.at[1], c[2] + dz - rotor.at[2]], rotor.q)
+    : [c[0] + dx, c[1] + dy, c[2] + dz];
+  const centre = rotor ? D.turnPoint(rotor.at, [c[0] - rotor.at[0], c[1] - rotor.at[1], c[2] - rotor.at[2]], rotor.q) : c;
+  out.push({ depth: D.depth(centre) - 0.5, draw() {
+    const P = (dx, dy, dz) => D.project(corner(dx, dy, dz));
+    // Side faces, each with its outward direction in 3D (before turning).
+    const faces = [
+      { n: [1, 0], pts: [P(.5, -.5, 0), P(.5, .5, 0), P(.5, .5, -1), P(.5, -.5, -1)] },
+      { n: [0, 1], pts: [P(.5, .5, 0), P(-.5, .5, 0), P(-.5, .5, -1), P(.5, .5, -1)] },
+      { n: [-1, 0], pts: [P(-.5, .5, 0), P(-.5, -.5, 0), P(-.5, -.5, -1), P(-.5, .5, -1)] },
+      { n: [0, -1], pts: [P(-.5, -.5, 0), P(.5, -.5, 0), P(.5, -.5, -1), P(-.5, -.5, -1)] },
+    ];
+    const a = (rotor ? rotor.q : 0) * Math.PI / 2, ca = Math.cos(a), sa = Math.sin(a);
+    ctx.lineJoin = 'round';
+    for (const f of faces) {
+      const nx = f.n[0] * ca - f.n[1] * sa, ny = f.n[0] * sa + f.n[1] * ca;
+      if (nx + ny <= 0.001) continue;               // facing away from us
+      const k = Math.max(0, Math.min(1, 0.5 + 0.5 * (nx - ny) / Math.SQRT2));   // +x faces lighter
+      ctx.fillStyle = mix(DARK, LIGHT, k); poly(f.pts); ctx.fill();
+      hatch(f.pts, k > 0.5 ? 7 : 4, k > 0.5 ? 0.18 : 0.3);
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.3; poly(f.pts); ctx.stroke();
+    }
+    const top = [P(-.5, -.5, 0), P(.5, -.5, 0), P(.5, .5, 0), P(-.5, .5, 0)];
+    ctx.fillStyle = TOP; poly(top); ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = 1.3; poly(top); ctx.stroke();
+  } });
+}
+
+function mix(c1, c2, k) {
+  const a = parseInt(c1.slice(1), 16), b = parseInt(c2.slice(1), 16);
+  const ch = s => Math.round(((a >> s) & 255) * (1 - k) + ((b >> s) & 255) * k);
+  return `rgb(${ch(16)}, ${ch(8)}, ${ch(0)})`;
+}
+
+// A track is cut into short pieces, so each piece can be drawn at its own depth.
+function trackPieces(tr, out) {
+  const color = tr.only ? D.COLORS[tr.only] : null;
+  for (let i = 0; i + 1 < tr.pts.length; i++) {
+    const a = tr.pts[i], b = tr.pts[i + 1];
+    const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]) * 2));
+    for (let k = 0; k < n; k++) {
+      const p = a.map((v, j) => v + (b[j] - v) * k / n), q = a.map((v, j) => v + (b[j] - v) * (k + 1) / n);
+      const mid = p.map((v, j) => (v + q[j]) / 2);
+      out.push({ depth: D.depth(mid) + 0.75, draw() {
+        const P = D.project(p), Q = D.project(q);
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = INK; ctx.lineWidth = Math.max(4, scale * 0.2);
+        ctx.beginPath(); ctx.moveTo(px(P), py(P)); ctx.lineTo(px(Q), py(Q)); ctx.stroke();
+        ctx.strokeStyle = color || '#fbf6ea'; ctx.lineWidth = Math.max(2, scale * 0.1);
+        ctx.beginPath(); ctx.moveTo(px(P), py(P)); ctx.lineTo(px(Q), py(Q)); ctx.stroke();
+      } });
+    }
+  }
+  // A small arrow in the middle of the track shows which way balls roll.
+  const L = tr.scr.length;
+  if (L >= 2) {
+    const i = Math.floor((L - 2) / 2), A = tr.scr[i], B = tr.scr[i + 1];
+    const mid3 = tr.pts[i].map((v, j) => (v + tr.pts[i + 1][j]) / 2);
+    out.push({ depth: D.depth(mid3) + 0.8, draw() {
+      const mx = px([(A[0] + B[0]) / 2]), my = py([0, (A[1] + B[1]) / 2]);
+      const ang = Math.atan2(B[1] - A[1], B[0] - A[0]), h = Math.max(3, scale * 0.09);
+      ctx.fillStyle = INK; ctx.beginPath();
+      ctx.moveTo(mx + Math.cos(ang) * h * 1.4, my + Math.sin(ang) * h * 1.4);
+      ctx.lineTo(mx + Math.cos(ang + 2.4) * h, my + Math.sin(ang + 2.4) * h);
+      ctx.lineTo(mx + Math.cos(ang - 2.4) * h, my + Math.sin(ang - 2.4) * h);
+      ctx.closePath(); ctx.fill();
+    } });
+  }
+}
+
+// The round hub of a rotor, drawn as a flat disc seen at an angle.
+function hubPiece(r, out) {
+  out.push({ depth: D.depth(r.at) + 0.9, draw() {
+    const c = toScreen(D.project(r.at)), R = Math.max(9, scale * 0.32);
+    const busy = r.q !== r.goal;
+    ctx.fillStyle = r.auto ? '#d8c9a6' : '#fbf6ea'; ctx.strokeStyle = INK; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.ellipse(c[0], c[1], R, R * 0.58, 0, 0, 6.283); ctx.fill(); ctx.stroke();
+    if (r.auto) {   // a flip-switch: striped
+      ctx.save(); ctx.beginPath(); ctx.ellipse(c[0], c[1], R, R * 0.58, 0, 0, 6.283); ctx.clip();
+      ctx.strokeStyle = 'rgba(43,38,32,.45)'; ctx.lineWidth = 1.5; ctx.beginPath();
+      for (let k = -R; k < R; k += 4) { ctx.moveTo(c[0] + k, c[1] + R); ctx.lineTo(c[0] + k + R, c[1] - R); }
+      ctx.stroke(); ctx.restore();
+    } else {        // a joint you can tap: a gentle pulsing ring
+      const pulse = busy ? 0 : 0.5 + 0.5 * Math.sin(clock * 3);
+      ctx.strokeStyle = `rgba(155, 61, 44, ${0.35 + 0.4 * pulse})`; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.ellipse(c[0], c[1], R + 4 + 2 * pulse, (R + 4 + 2 * pulse) * 0.58, 0, 0, 6.283); ctx.stroke();
+    }
+    ctx.fillStyle = INK; ctx.beginPath(); ctx.arc(c[0], c[1], 2.5, 0, 6.283); ctx.fill();
+    ctx.font = `${Math.max(11, scale * 0.3)}px "IM Fell English", Georgia, serif`;
+    ctx.textAlign = 'center'; ctx.fillStyle = INK;
+    if (!r.auto) ctx.fillText(r.id, c[0], c[1] - R * 0.58 - 6);
+  } });
+}
+
+function drawBasket(k) {
+  const c = toScreen(k.scr), R = D.MOUTH * scale, h = scale * 0.8;
+  const rim = k.color ? D.COLORS[k.color] : INK;
+  ctx.lineWidth = 2; ctx.strokeStyle = INK; ctx.fillStyle = '#e4d5b2';
+  ctx.beginPath();
+  ctx.moveTo(c[0] - R, c[1]); ctx.lineTo(c[0] - R * 0.75, c[1] + h);
+  ctx.ellipse(c[0], c[1] + h, R * 0.75, R * 0.75 * 0.5, 0, Math.PI, 0, true);
+  ctx.lineTo(c[0] + R, c[1]); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = 'rgba(43,38,32,.45)'; ctx.lineWidth = 1;       // woven lines
+  for (let k2 = 1; k2 < 6; k2++) {
+    const f = k2 / 6, x = c[0] - R + 2 * R * f, xb = c[0] - R * 0.75 + 1.5 * R * f;
+    ctx.beginPath(); ctx.moveTo(x, c[1] + R * 0.3 * Math.sin(Math.PI * f)); ctx.lineTo(xb, c[1] + h + R * 0.37 * Math.sin(Math.PI * f)); ctx.stroke();
+  }
+  ctx.fillStyle = '#5b4a34'; ctx.strokeStyle = rim; ctx.lineWidth = k.color ? 4 : 2;
+  ctx.beginPath(); ctx.ellipse(c[0], c[1], R, R * 0.5, 0, 0, 6.283); ctx.fill(); ctx.stroke();
+  // One dot per ball it needs, filled in as it gets them.
+  const n = k.need, gap = Math.min(14, 2.4 * R / n);
+  for (let i = 0; i < n; i++) {
+    const x = c[0] + (i - (n - 1) / 2) * gap, y = c[1] + h + R * 0.55 + 8;
+    ctx.beginPath(); ctx.arc(x, y, Math.min(5, gap * 0.36), 0, 6.283);
+    ctx.fillStyle = i < k.count ? (k.color ? D.COLORS[k.color] : INK) : '#f7f0e0';
+    ctx.fill(); ctx.strokeStyle = INK; ctx.lineWidth = 1.2; ctx.stroke();
+  }
+}
+
+function drawHopper() {
+  const c = toScreen(g.hopperScr), R = scale * 0.45;
+  ctx.fillStyle = '#ddd1b6'; ctx.strokeStyle = INK; ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(c[0] - R * 1.4, c[1] - scale * 1.1); ctx.lineTo(c[0] + R * 1.4, c[1] - scale * 1.1);
+  ctx.lineTo(c[0] + R * 0.4, c[1] - scale * 0.2); ctx.lineTo(c[0] - R * 0.4, c[1] - scale * 0.2);
+  ctx.closePath(); ctx.fill(); hatch([[(c[0] - ox) / scale - 0.6, (c[1] - oy) / scale - 1.1], [(c[0] - ox) / scale + 0.6, (c[1] - oy) / scale - 1.1], [(c[0] - ox) / scale + 0.2, (c[1] - oy) / scale - 0.2], [(c[0] - ox) / scale - 0.2, (c[1] - oy) / scale - 0.2]], 5, 0.25);
+  ctx.beginPath();
+  ctx.moveTo(c[0] - R * 1.4, c[1] - scale * 1.1); ctx.lineTo(c[0] + R * 1.4, c[1] - scale * 1.1);
+  ctx.lineTo(c[0] + R * 0.4, c[1] - scale * 0.2); ctx.lineTo(c[0] - R * 0.4, c[1] - scale * 0.2);
+  ctx.closePath(); ctx.stroke();
+  // The colour of the next ball.
+  if (g.dropped < g.total) {
+    const color = D.COLORS[g.colors[g.dropped % g.colors.length]];
+    ball(c[0], c[1] - scale * 0.75, color);
+  }
+}
+
+function ball(x, y, color) {
+  const r = Math.max(5, scale * 0.17);
+  const grad = ctx.createRadialGradient(x - r * 0.35, y - r * 0.4, r * 0.1, x, y, r);
+  grad.addColorStop(0, '#ffffff'); grad.addColorStop(0.35, color); grad.addColorStop(1, mix(color.length === 7 ? color : '#888888', '#2b2620', 0.45));
+  ctx.fillStyle = grad; ctx.beginPath(); ctx.arc(x, y - r * 0.6, r, 0, 6.283); ctx.fill();
+  ctx.strokeStyle = INK; ctx.lineWidth = 1.2; ctx.stroke();
+}
+
+function draw() {
+  ctx.fillStyle = '#efe6d3'; ctx.fillRect(0, 0, W, H);
+  if (!level || !g || mode === 'menu') return;
+
+  const pieces = [];
+  for (const b of level.blocks || []) cubePieces(b, pieces, null);
+  for (const r of g.rotors) for (const b of r.blocks) cubePieces([r.at[0] + b[0], r.at[1] + b[1], r.at[2] + b[2]], pieces, r);
+  for (const tr of g.tracks) trackPieces(tr, pieces);
+  for (const r of g.rotors) hubPiece(r, pieces);
+  pieces.sort((a, b) => a.depth - b.depth);
+  for (const p of pieces) p.draw();
+
+  for (const k of g.baskets) drawBasket(k);
+  drawHopper();
+  for (const b of g.balls) ball(px([b.x]), py([0, b.y]), D.COLORS[b.color] || b.color);
+
+  for (const s of sparks) {
+    ctx.globalAlpha = Math.max(0, Math.min(1, s.life * 2.5)); ctx.fillStyle = s.color;
+    ctx.fillRect(px([s.x]) - 1.5, py([0, s.y]) - 1.5, 3, 3);
+  }
+  ctx.globalAlpha = 1;
+
+  if (message && message.text && clock < message.until) {
+    ctx.font = '16px "IM Fell English", Georgia, serif'; ctx.textAlign = 'center';
+    const tw = Math.min(W - 24, ctx.measureText(message.text).width + 28), y = H - 34;
+    ctx.fillStyle = 'rgba(43, 38, 32, .9)'; ctx.fillRect(W / 2 - tw / 2, y - 19, tw, 30);
+    ctx.fillStyle = '#f7f0e0'; ctx.fillText(message.text, W / 2, y + 1, tw - 16);
+  }
+}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  advance(dt); draw();
+  requestAnimationFrame(frame);
+}
+
+addEventListener('resize', resize);
+resize();
+setMuted(muted);
+showMenu();
+requestAnimationFrame(frame);
+
+// A handle for testing from the browser console, for example:
+//   game.startLevel(2); game.useSolution(); game.run(30)
+window.game = {
+  levels: LEVELS, startLevel, showMenu, useSolution, tap: tapRotor, advance, draw,
+  // Run the game for up to this many seconds of game time, without waiting. Says whether the level was won.
+  run(seconds) {
+    for (let k = 0; k < seconds / D.DT && mode === 'play'; k++) stepOnce();
+    if (mode === 'winning') showWin();
+    return mode === 'won';
+  },
+  get mode() { return mode; }, get state() { return g; }, get progress() { return progress; },
+  get message() { return message && message.text; }, get muted() { return muted; },
+};
+</script>
+</body>
+</html>
