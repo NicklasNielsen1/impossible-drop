@@ -395,7 +395,10 @@ function cubePieces(c, out, rotor) {
     ? D.turnPoint(rotor.at, [c[0] + dx - rotor.at[0], c[1] + dy - rotor.at[1], c[2] + dz - rotor.at[2]], rotor.q)
     : [c[0] + dx, c[1] + dy, c[2] + dz];
   const centre = rotor ? D.turnPoint(rotor.at, [c[0] - rotor.at[0], c[1] - rotor.at[1], c[2] - rotor.at[2]], rotor.q) : c;
-  out.push({ depth: D.depth(centre) - 0.5, draw() {
+  // The cube's outline on screen, used to find tracks it covers.
+  const corners = [];
+  for (const dx of [-.5, .5]) for (const dy of [-.5, .5]) for (const dz of [0, -1]) corners.push(D.project(corner(dx, dy, dz)));
+  out.push({ depth: D.depth(centre) - 0.5, outline: hull(corners), draw() {
     const P = (dx, dy, dz) => D.project(corner(dx, dy, dz));
     // Side faces, each with its outward direction in 3D (before turning).
     const faces = [
@@ -420,6 +423,25 @@ function cubePieces(c, out, rotor) {
   } });
 }
 
+// The outline around a set of points (their "convex hull"), going round anticlockwise.
+function hull(pts) {
+  pts = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], up = [];
+  for (const p of pts) { while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+  for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
+}
+// Is point p well inside the outline (at least "margin" from every edge)?
+function inOutline(outline, p, margin) {
+  for (let i = 0; i < outline.length; i++) {
+    const a = outline[i], b = outline[(i + 1) % outline.length];
+    const ex = b[0] - a[0], ey = b[1] - a[1];
+    if ((ex * (p[1] - a[1]) - ey * (p[0] - a[0])) / Math.hypot(ex, ey) < margin) return false;
+  }
+  return true;
+}
+
 function mix(c1, c2, k) {
   const a = parseInt(c1.slice(1), 16), b = parseInt(c2.slice(1), 16);
   const ch = s => Math.round(((a >> s) & 255) * (1 - k) + ((b >> s) & 255) * k);
@@ -435,7 +457,7 @@ function trackPieces(tr, out) {
     for (let k = 0; k < n; k++) {
       const p = a.map((v, j) => v + (b[j] - v) * k / n), q = a.map((v, j) => v + (b[j] - v) * (k + 1) / n);
       const mid = p.map((v, j) => (v + q[j]) / 2);
-      out.push({ depth: D.depth(mid) + 0.75, draw() {
+      out.push({ depth: D.depth(mid) + 0.75, ghost: { P: D.project(p), Q: D.project(q), M: D.project(mid), color }, draw() {
         const P = D.project(p), Q = D.project(q);
         ctx.lineCap = 'round';
         ctx.strokeStyle = INK; ctx.lineWidth = Math.max(4, scale * 0.2);
@@ -548,6 +570,19 @@ function draw() {
   for (const r of g.rotors) hubPiece(r, pieces);
   pieces.sort((a, b) => a.depth - b.depth);
   for (const p of pieces) p.draw();
+  // Track hidden behind a cube is drawn again as a dashed line, so you can always see where
+  // balls can roll ("x-ray" view).
+  ctx.setLineDash([Math.max(3, scale * 0.12), Math.max(3, scale * 0.1)]); ctx.lineCap = 'butt';
+  pieces.forEach((t, i) => {
+    if (!t.ghost) return;
+    for (let j = i + 1; j < pieces.length; j++) {
+      if (!pieces[j].outline || !inOutline(pieces[j].outline, t.ghost.M, 0.08)) continue;
+      ctx.strokeStyle = t.ghost.color || INK; ctx.lineWidth = Math.max(1.5, scale * 0.06);
+      ctx.beginPath(); ctx.moveTo(px(t.ghost.P), py(t.ghost.P)); ctx.lineTo(px(t.ghost.Q), py(t.ghost.Q)); ctx.stroke();
+      break;
+    }
+  });
+  ctx.setLineDash([]);
 
   for (const k of g.baskets) drawBasket(k);
   drawHopper();
